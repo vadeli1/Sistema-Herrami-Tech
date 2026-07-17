@@ -198,19 +198,27 @@
    ========================================================= */
 const ADMIN_PASSWORD = "socio2026";
 
-const LIMA_COLS = ["Asesor","Fecha","Fecha Entrega","Nombre","Dirección","Notas","Celular","ID","Producto","Variante","Cantidad","Precio","Costo Delivery","Courier","Estado"];
-const PROVINCIA_COLS = ["Asesor","Fecha","Cliente","DNI","Estado","Observación","Distrito","Numero","ID","Producto","Variante","Cantidad","Monto","Adelanto","Envio","Restante","Agencia","Clave"];
+const LIMA_COLS = ["ASESOR","CONFIRMADO","ENTREGA","NOMBRES","DIRECCIÓN","NOTAS","CELULAR","ID","PRODUCTO","VARIANTE","CANTIDAD","PRECIO","UPSELL 1","ADELANTO","COBRO","DELIVERY","RESTANTE","COURIER","ESTADO"];
+const PROVINCIA_COLS = ["ASESOR","FECHAS","CLIENTE","DNI","ESTADO","OBSERVACIÓN","DISTRITO","NUMERO","ID","PRODUCTO","VARIANTE","CANTIDAD","MONTO","ADELANTO","ENVIO","RESTANTE","AGENCIA","CLAVE"];
+
+const LIMA_ESTADOS = ["EN PROCESO","ENTREGADO","NO ENTREGADO","CANCELO","ESPERANDO","REAGENDADO"];
+const PROVINCIA_ESTADOS = ["EN PROCESO","ENTREGADO","EN DESTINO","EN TRÁNSITO","REGISTRADO","M. REGISTRADO","NO REGISTRAR","CANCELADO","CAMBIO DE CLIENTE"];
+const LIMA_RECHAZADO = ["NO ENTREGADO","CANCELO"];
+const PROVINCIA_RECHAZADO = ["CANCELADO","CAMBIO DE CLIENTE"];
 
 const FIELD_META = {
-  "Fecha": {type:"date"}, "Fecha Entrega": {type:"date"},
-  "Cantidad": {type:"number"}, "Precio": {type:"number"}, "Costo Delivery": {type:"number"},
-  "Monto": {type:"number"}, "Adelanto": {type:"number"}, "Envio": {type:"number"},
-  "Restante": {type:"number", readonly:true}, "Costo": {type:"number"}, "TipoCambio": {type:"number"},
-  "Estado": {type:"select", options:["Confirmado","Entregado","Rechazado"]},
+  "CONFIRMADO": {type:"date"}, "ENTREGA": {type:"date"}, "FECHAS": {type:"date"},
+  "CANTIDAD": {type:"number"}, "PRECIO": {type:"number"}, "DELIVERY": {type:"number"},
+  "UPSELL 1": {type:"number"}, "ADELANTO": {type:"number"}, "COBRO": {type:"number"},
+  "MONTO": {type:"number"}, "ENVIO": {type:"number"},
+  "RESTANTE": {type:"number", readonly:true}, "Costo": {type:"number"}, "TipoCambio": {type:"number"},
   "IGV": {type:"select", options:["Sí","No"]},
   "Moneda": {type:"select", options:["PEN","USD"]},
   "Plataforma": {type:"select", options:["TikTok Ads","Facebook Ads","Otro"]}
 };
+function estadoMetaFor(region){
+  return {type:"select", options: region==="lima" ? LIMA_ESTADOS : PROVINCIA_ESTADOS};
+}
 
 let API_URL = localStorage.getItem("gr_api_url") || "";
 let role = null;
@@ -363,21 +371,24 @@ function buscarCosto(producto, variante){
   return match ? (parseFloat(match.Costo)||0) : 0;
 }
 function derivarLima(r){
-  const cantidad = parseFloat(r.Cantidad)||0, precio = parseFloat(r.Precio)||0, costoEnvio = parseFloat(r["Costo Delivery"])||0;
-  const costoProducto = buscarCosto(r.Producto, r.Variante) * cantidad;
-  const ingreso = r.Estado==="Entregado" ? precio : 0;
+  const cantidad = parseFloat(r.CANTIDAD)||0, precio = parseFloat(r.PRECIO)||0;
+  const costoEnvio = parseFloat(r.DELIVERY)||0;
+  const costoProducto = buscarCosto(r.PRODUCTO, r.VARIANTE) * cantidad;
+  const estado = (r.ESTADO||"").trim().toUpperCase();
+  const ingreso = estado==="ENTREGADO" ? precio : 0;
   let utilidad = 0;
-  if(r.Estado==="Entregado") utilidad = precio - costoEnvio - costoProducto;
-  else if(r.Estado==="Rechazado") utilidad = -costoEnvio;
+  if(estado==="ENTREGADO") utilidad = precio - costoEnvio - costoProducto;
+  else if(LIMA_RECHAZADO.includes(estado)) utilidad = -costoEnvio;
   return {costoProducto, ingreso, utilidad, costoEnvio, region:"Lima"};
 }
 function derivarProvincia(r){
-  const cantidad = parseFloat(r.Cantidad)||0, monto = parseFloat(r.Monto)||0, costoEnvio = parseFloat(r.Envio)||0;
-  const costoProducto = buscarCosto(r.Producto, r.Variante) * cantidad;
-  const ingreso = r.Estado==="Entregado" ? monto : 0;
+  const cantidad = parseFloat(r.CANTIDAD)||0, monto = parseFloat(r.MONTO)||0, costoEnvio = parseFloat(r.ENVIO)||0;
+  const costoProducto = buscarCosto(r.PRODUCTO, r.VARIANTE) * cantidad;
+  const estado = (r.ESTADO||"").trim().toUpperCase();
+  const ingreso = estado==="ENTREGADO" ? monto : 0;
   let utilidad = 0;
-  if(r.Estado==="Entregado") utilidad = monto - costoEnvio - costoProducto;
-  else if(r.Estado==="Rechazado") utilidad = -costoEnvio;
+  if(estado==="ENTREGADO") utilidad = monto - costoEnvio - costoProducto;
+  else if(PROVINCIA_RECHAZADO.includes(estado)) utilidad = -costoEnvio;
   return {costoProducto, ingreso, utilidad, costoEnvio, region:"Provincia"};
 }
 function adDerivado(ad){
@@ -387,8 +398,8 @@ function adDerivado(ad){
   return {base, igv, total: base+igv};
 }
 function todosPedidosDerivados(){
-  const l = cloud.lima.map(r=> Object.assign({fecha:r.Fecha, estado:r.Estado}, derivarLima(r)));
-  const p = cloud.provincia.map(r=> Object.assign({fecha:r.Fecha, estado:r.Estado}, derivarProvincia(r)));
+  const l = cloud.lima.map(r=> Object.assign({fecha:r.CONFIRMADO, estado:r.ESTADO}, derivarLima(r)));
+  const p = cloud.provincia.map(r=> Object.assign({fecha:r.FECHAS, estado:r.ESTADO}, derivarProvincia(r)));
   return l.concat(p);
 }
 function resumenPorRegion(){
@@ -398,8 +409,10 @@ function resumenPorRegion(){
     let entregados=0, ingresos=0, costoProductos=0, costoEnvios=0, utilidadBruta=0;
     rs.forEach(p=>{
       utilidadBruta += p.utilidad;
-      if(p.estado==="Entregado"){ entregados++; ingresos+=p.ingreso; costoProductos+=p.costoProducto; costoEnvios+=p.costoEnvio; }
-      if(p.estado==="Rechazado"){ costoEnvios+=p.costoEnvio; }
+      const estUp = (p.estado||"").trim().toUpperCase();
+      const rechSet = p.region==="Lima" ? LIMA_RECHAZADO : PROVINCIA_RECHAZADO;
+      if(estUp==="ENTREGADO"){ entregados++; ingresos+=p.ingreso; costoProductos+=p.costoProducto; costoEnvios+=p.costoEnvio; }
+      if(rechSet.includes(estUp)){ costoEnvios+=p.costoEnvio; }
     });
     const margen = ingresos ? utilidadBruta/ingresos : 0;
     return {region, confirmados: rs.length, entregados, ingresos, costoProductos, costoEnvios, utilidadBruta, margen};
@@ -415,8 +428,10 @@ function resumenPorDia(){
     let entregados=0, ingresos=0, costoProductos=0, costoEnvios=0, utilidadBruta=0;
     rs.forEach(p=>{
       utilidadBruta += p.utilidad;
-      if(p.estado==="Entregado"){ entregados++; ingresos+=p.ingreso; costoProductos+=p.costoProducto; costoEnvios+=p.costoEnvio; }
-      if(p.estado==="Rechazado"){ costoEnvios+=p.costoEnvio; }
+      const estUp = (p.estado||"").trim().toUpperCase();
+      const rechSet = p.region==="Lima" ? LIMA_RECHAZADO : PROVINCIA_RECHAZADO;
+      if(estUp==="ENTREGADO"){ entregados++; ingresos+=p.ingreso; costoProductos+=p.costoProducto; costoEnvios+=p.costoEnvio; }
+      if(rechSet.includes(estUp)){ costoEnvios+=p.costoEnvio; }
     });
     let gastoAds = 0;
     local.publicidad.filter(a=>a.Fecha===fecha).forEach(a=>{ gastoAds += adDerivado(a).total; });
@@ -515,8 +530,8 @@ function renderResumen(){
 /* =========================================================
    TABLAS EDITABLES — LIMA / PROVINCIA (nube)
    ========================================================= */
-function inputFor(col, value){
-  const meta = FIELD_META[col] || {type:"text"};
+function inputFor(col, value, region){
+  const meta = col==="ESTADO" ? estadoMetaFor(region) : (FIELD_META[col] || {type:"text"});
   const safeVal = (value===undefined || value===null) ? "" : value;
   if(meta.readonly) return `<td class="readonly" data-col="${col}">${safeVal}</td>`;
   if(meta.type==="select"){
@@ -534,8 +549,9 @@ function renderCloudTable(tbl, cols, region, rowsArray, onAfterChange){
   const rows = [...rowsArray].sort((a,b)=> (a.Fecha||"")<(b.Fecha||"")?1:-1);
   tbl.innerHTML = `<thead><tr><th>Mes</th>${cols.map(c=>`<th>${c}</th>`).join("")}${extraHead}<th></th></tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>{
-      if(region==="provincia" && r.Monto!==undefined) r.Restante = (parseFloat(r.Monto)||0) - (parseFloat(r.Adelanto)||0);
-      const cells = cols.map(c=> inputFor(c, r[c])).join("");
+      if(region==="provincia" && r.MONTO!==undefined) r.RESTANTE = (parseFloat(r.MONTO)||0) - (parseFloat(r.ADELANTO)||0);
+      if(region==="lima" && r.PRECIO!==undefined) r.RESTANTE = (parseFloat(r.PRECIO)||0) - (parseFloat(r.ADELANTO)||0);
+      const cells = cols.map(c=> inputFor(c, r[c], region)).join("");
       let extra = "";
       if(showAdmin){
         const d = region==="lima" ? derivarLima(r) : derivarProvincia(r);
@@ -553,11 +569,17 @@ function renderCloudTable(tbl, cols, region, rowsArray, onAfterChange){
         const col = e.target.dataset.col;
         const val = e.target.value;
         const payload = { [col]: val };
-        if(region==="provincia" && (col==="Monto" || col==="Adelanto")){
+        if(region==="provincia" && (col==="MONTO" || col==="ADELANTO")){
           const row = rows[idx];
           row[col] = val;
-          row["Restante"] = (parseFloat(row.Monto)||0) - (parseFloat(row.Adelanto)||0);
-          payload["Restante"] = row["Restante"];
+          row["RESTANTE"] = (parseFloat(row.MONTO)||0) - (parseFloat(row.ADELANTO)||0);
+          payload["RESTANTE"] = row["RESTANTE"];
+        }
+        if(region==="lima" && (col==="PRECIO" || col==="ADELANTO")){
+          const row = rows[idx];
+          row[col] = val;
+          row["RESTANTE"] = (parseFloat(row.PRECIO)||0) - (parseFloat(row.ADELANTO)||0);
+          payload["RESTANTE"] = row["RESTANTE"];
         }
         try{
           await apiUpdateRow(region, trackId, payload);
@@ -630,9 +652,9 @@ function addNewPedido(region){
       const cols = region==="lima" ? LIMA_COLS : PROVINCIA_COLS;
       const row = {}; cols.forEach(c=> row[c]="");
       row["ID"] = values.id;
-      row["Asesor"] = role==="asesor" ? currentAsesor : "";
-      row["Fecha"] = todayStr();
-      row["Estado"] = "Confirmado";
+      row["ASESOR"] = role==="asesor" ? currentAsesor : "";
+      if(region==="lima"){ row["CONFIRMADO"] = todayStr(); row["ESTADO"] = "EN PROCESO"; }
+      else { row["FECHAS"] = todayStr(); row["ESTADO"] = "EN PROCESO"; }
       try{
         const res = await apiAddRow(region, row);
         row["_Mes"] = res.mes || "";
