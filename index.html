@@ -146,8 +146,15 @@
       <div class="card">
         <div class="toolbar">
           <div><h2>Pedidos — Lima <span class="badge-mes" id="mesLima"></span></h2><p class="sub">Actualiza el Estado cuando el courier confirme si se entregó o no. Se sincroniza con tu documento "PEDIDOS LIMA".</p></div>
-          <button class="btn" id="addLima">+ Nuevo pedido</button>
+          <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+            <div class="field" style="margin:0;"><label>Desde</label><input type="date" id="limaDesde"></div>
+            <div class="field" style="margin:0;"><label>Hasta</label><input type="date" id="limaHasta"></div>
+            <button class="btn ghost" id="limaLimpiarFiltro">Limpiar</button>
+            <button class="btn" id="addLima">+ Nuevo pedido</button>
+          </div>
         </div>
+        <h2 style="font-size:13px;margin-top:4px;">Resumen diario</h2>
+        <div class="table-scroll" style="max-height:260px;margin-bottom:18px;"><table id="tblResumenLima"></table></div>
         <div class="table-scroll"><table id="tblLima"></table></div>
       </div>
     </section>
@@ -157,8 +164,15 @@
       <div class="card">
         <div class="toolbar">
           <div><h2>Pedidos — Provincia <span class="badge-mes" id="mesProvincia"></span></h2><p class="sub">El Restante se calcula solo (Monto − Adelanto). Se sincroniza con "PEDIDOS PROVINCIA".</p></div>
-          <button class="btn" id="addProvincia">+ Nuevo pedido</button>
+          <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+            <div class="field" style="margin:0;"><label>Desde</label><input type="date" id="provDesde"></div>
+            <div class="field" style="margin:0;"><label>Hasta</label><input type="date" id="provHasta"></div>
+            <button class="btn ghost" id="provLimpiarFiltro">Limpiar</button>
+            <button class="btn" id="addProvincia">+ Nuevo pedido</button>
+          </div>
         </div>
+        <h2 style="font-size:13px;margin-top:4px;">Resumen diario</h2>
+        <div class="table-scroll" style="max-height:260px;margin-bottom:18px;"><table id="tblResumenProvincia"></table></div>
         <div class="table-scroll"><table id="tblProvincia"></table></div>
       </div>
     </section>
@@ -224,6 +238,15 @@ let API_URL = localStorage.getItem("gr_api_url") || "";
 let role = null;
 let currentAsesor = localStorage.getItem("gr_asesor_name") || "";
 let cloud = { lima: [], provincia: [], mesLima:"", mesProvincia:"" };
+let dateFilter = { lima: {desde:"", hasta:""}, provincia: {desde:"", hasta:""} };
+function dateFieldFor(region){ return region==="lima" ? "CONFIRMADO" : "FECHAS"; }
+function inRange(fecha, region){
+  const f = dateFilter[region];
+  if(!fecha) return !(f.desde || f.hasta);
+  if(f.desde && fecha < f.desde) return false;
+  if(f.hasta && fecha > f.hasta) return false;
+  return true;
+}
 let local = loadLocal();
 let pollTimer = null;
 
@@ -545,8 +568,11 @@ function inputFor(col, value, region){
 
 function renderCloudTable(tbl, cols, region, rowsArray, onAfterChange){
   const showAdmin = role==="admin";
+  const dateField = dateFieldFor(region);
   const extraHead = showAdmin ? "<th>Costo producto</th><th>Ingreso</th><th>Utilidad</th>" : "";
-  const rows = [...rowsArray].sort((a,b)=> (a.Fecha||"")<(b.Fecha||"")?1:-1);
+  const rows = rowsArray
+    .filter(r=> inRange(r[dateField], region))
+    .sort((a,b)=> (a[dateField]||"") < (b[dateField]||"") ? 1 : -1); // más reciente arriba
   tbl.innerHTML = `<thead><tr><th>Mes</th>${cols.map(c=>`<th>${c}</th>`).join("")}${extraHead}<th></th></tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>{
       if(region==="provincia" && r.MONTO!==undefined) r.RESTANTE = (parseFloat(r.MONTO)||0) - (parseFloat(r.ADELANTO)||0);
@@ -559,7 +585,7 @@ function renderCloudTable(tbl, cols, region, rowsArray, onAfterChange){
           <td class="readonly" style="color:${d.utilidad>=0?'var(--positive)':'var(--negative)'}">${fmt(d.utilidad)}</td>`;
       }
       return `<tr data-idx="${i}"><td class="readonly">${r._Mes||""}</td>${cells}${extra}<td><button class="icon-btn del-row" data-idx="${i}">✕</button></td></tr>`;
-    }).join("") : `<tr><td colspan="${cols.length+3}" style="padding:14px;color:var(--text-muted)">Sin pedidos aún en este mes.</td></tr>`}</tbody>`;
+    }).join("") : `<tr><td colspan="${cols.length+3}" style="padding:14px;color:var(--text-muted)">Sin pedidos en este rango.</td></tr>`}</tbody>`;
 
   tbl.querySelectorAll("tr[data-idx]").forEach(tr=>{
     const idx = parseInt(tr.dataset.idx,10);
@@ -601,8 +627,58 @@ function renderCloudTable(tbl, cols, region, rowsArray, onAfterChange){
     });
   });
 }
-function renderLima(){ renderCloudTable(document.getElementById("tblLima"), LIMA_COLS, "lima", cloud.lima, ()=>{ if(role==="admin"){ renderHero(); renderRegiones(); renderResumen(); } }); }
-function renderProvincia(){ renderCloudTable(document.getElementById("tblProvincia"), PROVINCIA_COLS, "provincia", cloud.provincia, ()=>{ if(role==="admin"){ renderHero(); renderRegiones(); renderResumen(); } }); }
+function renderResumenDiarioConteo(tbl, region, rowsArray){
+  const dateField = dateFieldFor(region);
+  const rechSet = region==="lima" ? LIMA_RECHAZADO : PROVINCIA_RECHAZADO;
+  const rows = rowsArray.filter(r=> inRange(r[dateField], region));
+  const porDia = {};
+  rows.forEach(r=>{
+    const fecha = r[dateField] || "(sin fecha)";
+    const estado = (r.ESTADO||"").trim().toUpperCase();
+    if(!porDia[fecha]) porDia[fecha] = {total:0, entregados:0, rechazados:0, pendientes:0};
+    porDia[fecha].total++;
+    if(estado==="ENTREGADO") porDia[fecha].entregados++;
+    else if(rechSet.includes(estado)) porDia[fecha].rechazados++;
+    else porDia[fecha].pendientes++;
+  });
+  const fechas = Object.keys(porDia).sort().reverse();
+  if(fechas.length===0){ tbl.innerHTML = `<tbody><tr><td style="padding:12px;color:var(--text-muted)">Sin pedidos en este rango.</td></tr></tbody>`; return; }
+  const body = fechas.map(f=>{
+    const d = porDia[f];
+    return `<tr><td>${f}</td><td>${d.total}</td><td style="color:var(--positive)">${d.entregados}</td><td style="color:var(--negative)">${d.rechazados}</td><td>${d.pendientes}</td></tr>`;
+  }).join("");
+  const tot = fechas.reduce((acc,f)=>{ const d=porDia[f]; acc.total+=d.total; acc.entregados+=d.entregados; acc.rechazados+=d.rechazados; acc.pendientes+=d.pendientes; return acc; }, {total:0,entregados:0,rechazados:0,pendientes:0});
+  tbl.innerHTML = `<thead><tr><th>Fecha</th><th>Total pedidos</th><th>Entregados</th><th>Rechazados</th><th>Pendientes</th></tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr><td>Total</td><td>${tot.total}</td><td>${tot.entregados}</td><td>${tot.rechazados}</td><td>${tot.pendientes}</td></tr></tfoot>`;
+}
+
+function wireDateFilters(){
+  function apply(region, from, to){
+    dateFilter[region] = { desde: document.getElementById(from).value, hasta: document.getElementById(to).value };
+    if(region==="lima") renderLima(); else renderProvincia();
+  }
+  document.getElementById("limaDesde").addEventListener("change", ()=> apply("lima","limaDesde","limaHasta"));
+  document.getElementById("limaHasta").addEventListener("change", ()=> apply("lima","limaDesde","limaHasta"));
+  document.getElementById("provDesde").addEventListener("change", ()=> apply("provincia","provDesde","provHasta"));
+  document.getElementById("provHasta").addEventListener("change", ()=> apply("provincia","provDesde","provHasta"));
+  document.getElementById("limaLimpiarFiltro").addEventListener("click", ()=>{
+    document.getElementById("limaDesde").value=""; document.getElementById("limaHasta").value="";
+    dateFilter.lima = {desde:"",hasta:""}; renderLima();
+  });
+  document.getElementById("provLimpiarFiltro").addEventListener("click", ()=>{
+    document.getElementById("provDesde").value=""; document.getElementById("provHasta").value="";
+    dateFilter.provincia = {desde:"",hasta:""}; renderProvincia();
+  });
+}
+function renderLima(){
+  renderResumenDiarioConteo(document.getElementById("tblResumenLima"), "lima", cloud.lima);
+  renderCloudTable(document.getElementById("tblLima"), LIMA_COLS, "lima", cloud.lima, ()=>{ if(role==="admin"){ renderHero(); renderRegiones(); renderResumen(); } });
+}
+function renderProvincia(){
+  renderResumenDiarioConteo(document.getElementById("tblResumenProvincia"), "provincia", cloud.provincia);
+  renderCloudTable(document.getElementById("tblProvincia"), PROVINCIA_COLS, "provincia", cloud.provincia, ()=>{ if(role==="admin"){ renderHero(); renderRegiones(); renderResumen(); } });
+}
 
 /* =========================================================
    TABLAS LOCALES — PRODUCTOS / PUBLICIDAD (solo admin)
@@ -726,6 +802,7 @@ async function enterApp(){
 
 function init(){
   wireAddButtons();
+  wireDateFilters();
   if(API_URL){
     document.getElementById("screenConfig").style.display = "none";
     document.getElementById("screenLogin").style.display = "flex";
