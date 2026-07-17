@@ -278,56 +278,51 @@ function confirmModal(title, sub, onYes){
 }
 
 /* =========================================================
-   API — dos documentos reales vía Apps Script
-   (usamos XMLHttpRequest en vez de fetch: Apps Script hace un
-   redireccionamiento interno que fetch() a veces bloquea por CORS
-   cuando se llama desde un dominio externo como GitHub Pages)
+   API — dos documentos reales vía Apps Script (técnica JSONP)
+   Usamos JSONP en vez de fetch/XHR porque Google Apps Script no
+   entrega correctamente los encabezados CORS cuando se llama desde
+   un sitio externo (como GitHub Pages) — JSONP evita ese bloqueo
+   por completo, ya que usa una etiqueta <script>, no una petición
+   sujeta a CORS.
    ========================================================= */
-function httpGet(url){
+function jsonp(url){
   return new Promise((resolve, reject)=>{
-    const xhr = new XMLHttpRequest();
-    xhr.open("GET", url, true);
-    xhr.onload = ()=>{
-      if(xhr.status >= 200 && xhr.status < 300){
-        try{ resolve(JSON.parse(xhr.responseText)); }
-        catch(e){ reject(new Error("Respuesta no es JSON válido")); }
-      } else reject(new Error("HTTP " + xhr.status));
-    };
-    xhr.onerror = ()=> reject(new Error("Failed to fetch"));
-    xhr.send();
-  });
-}
-function httpPost(url, bodyObj){
-  return new Promise((resolve, reject)=>{
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", url, true);
-    xhr.setRequestHeader("Content-Type", "text/plain;charset=utf-8");
-    xhr.onload = ()=>{
-      if(xhr.status >= 200 && xhr.status < 300){
-        try{ resolve(JSON.parse(xhr.responseText)); }
-        catch(e){ reject(new Error("Respuesta no es JSON válido")); }
-      } else reject(new Error("HTTP " + xhr.status));
-    };
-    xhr.onerror = ()=> reject(new Error("Failed to fetch"));
-    xhr.send(JSON.stringify(bodyObj));
+    const cbName = "gr_cb_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+    const script = document.createElement("script");
+    let done = false;
+    let timer;
+    function cleanup(){
+      done = true;
+      clearTimeout(timer);
+      delete window[cbName];
+      if(script.parentNode) script.parentNode.removeChild(script);
+    }
+    window[cbName] = (data)=>{ resolve(data); cleanup(); };
+    script.onerror = ()=>{ if(!done){ reject(new Error("No se pudo conectar con Google Script")); cleanup(); } };
+    script.src = url + (url.indexOf("?")>-1 ? "&" : "?") + "callback=" + cbName;
+    timer = setTimeout(()=>{ if(!done){ reject(new Error("Tiempo de espera agotado")); cleanup(); } }, 20000);
+    document.body.appendChild(script);
   });
 }
 async function apiGetRegion(region){
-  const data = await httpGet(API_URL + "?region=" + region);
+  const data = await jsonp(API_URL + "?region=" + region + "&action=read");
   if(!data.ok) throw new Error(data.error || "Error al leer " + region);
   return data;
 }
 async function apiAddRow(region, row){
-  const data = await httpPost(API_URL, { region, action:"addRow", row });
+  const url = API_URL + "?region=" + region + "&action=addRow&row=" + encodeURIComponent(JSON.stringify(row));
+  const data = await jsonp(url);
   if(!data.ok) throw new Error(data.error || "Error al agregar pedido");
   return data;
 }
 async function apiUpdateRow(region, id, row){
-  const data = await httpPost(API_URL, { region, action:"updateRow", id, row });
+  const url = API_URL + "?region=" + region + "&action=updateRow&id=" + encodeURIComponent(id) + "&row=" + encodeURIComponent(JSON.stringify(row));
+  const data = await jsonp(url);
   if(!data.ok) throw new Error(data.error || "Error al actualizar pedido");
 }
 async function apiDeleteRow(region, id){
-  const data = await httpPost(API_URL, { region, action:"deleteRow", id });
+  const url = API_URL + "?region=" + region + "&action=deleteRow&id=" + encodeURIComponent(id);
+  const data = await jsonp(url);
   if(!data.ok) throw new Error(data.error || "Error al eliminar pedido");
 }
 
